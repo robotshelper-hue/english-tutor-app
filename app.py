@@ -1,15 +1,14 @@
 import streamlit as st
 import google.generativeai as genai
+from audio_recorder_streamlit import audio_recorder
 
 # 1. Configure the API Key
-# We grab the API key from Streamlit Secrets (for security)
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception as e:
     st.error("API Key not found. Please set it in Streamlit Secrets.")
 
-# 2. Set up the Model
-# Paste the generation config from your AI Studio code here if you have specific settings
+# 2. Configure the Model (Gemini 1.5 Flash handles Audio!)
 generation_config = {
   "temperature": 1,
   "top_p": 0.95,
@@ -17,57 +16,64 @@ generation_config = {
   "max_output_tokens": 8192,
 }
 
-# Create the model
-# NOTE: If you added a specific System Instruction in AI Studio (e.g., "You are an English Tutor"),
-# add it inside the instruction="" quotes below.
 model = genai.GenerativeModel(
-  model_name="gemini-1.5-flash", 
+  model_name="gemini-1.5-flash",
   generation_config=generation_config,
-  system_instruction="You are a helpful and patient English language tutor. Correct grammar mistakes and help the user practice conversation."
+  # We update the instructions to specifically listen for pronunciation
+  system_instruction="You are an English Tutor. Listen to the user's audio. If they make pronunciation errors, correct them gently. If they speak clearly, continue the conversation naturally in English. Keep responses concise."
 )
 
-# 3. Build the Streamlit App UI
-st.title("English Tutoring Bot 🤖")
-st.write("Start chatting to practice your English!")
+st.title("English Tutor with Voice 🎙️")
+st.write("Click the microphone to speak. The AI will listen and correct your pronunciation!")
 
-# Initialize chat history if it doesn't exist
+# Initialize chat history
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Display previous chat history
-for role, message in st.session_state.chat_history:
+# Display chat history
+for role, content in st.session_state.chat_history:
     with st.chat_message(role):
-        st.markdown(message)
+        st.markdown(content)
 
-# 4. Handle User Input
-if user_input := st.chat_input("Type your message here..."):
-    # Display user message
+# 3. Add the Microphone
+# This creates a button. Click to record, click again to stop.
+audio_bytes = audio_recorder(text="", icon_size="2x")
+
+if audio_bytes:
+    # Display what the user just sent (audio player)
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.audio(audio_bytes, format="audio/wav")
     
-    # Save user message to history
-    st.session_state.chat_history.append(("user", user_input))
+    # Add a placeholder to show the user we sent the audio
+    st.session_state.chat_history.append(("user", "🎤 [Sent Audio Message]"))
 
-    # Generate AI response
+    # 4. Send Audio to Gemini
     try:
-        # We start a chat session with history
-        chat_session = model.start_chat(
-            history=[
-                {"role": role, "parts": [text]} 
-                for role, text in st.session_state.chat_history 
-                if role == "user" or role == "model" # Map user/model roles correctly
-            ]
-        )
+        # Gemini expects a dictionary for audio parts
+        response = model.generate_content([
+            "Please analyze my pronunciation and respond to what I said.",
+            {"mime_type": "audio/wav", "data": audio_bytes}
+        ])
         
-        response = chat_session.send_message(user_input)
         ai_response = response.text
 
-        # Display AI response
+        # Display AI Response
         with st.chat_message("assistant"):
             st.markdown(ai_response)
         
-        # Save AI response to history
+        # Save to history
         st.session_state.chat_history.append(("model", ai_response))
 
     except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.error(f"Error analyzing audio: {e}")
+
+# Optional: Keep text input if they want to type
+if user_input := st.chat_input("Or type your message here..."):
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    st.session_state.chat_history.append(("user", user_input))
+    
+    response = model.generate_content(user_input)
+    with st.chat_message("assistant"):
+        st.markdown(response.text)
+    st.session_state.chat_history.append(("model", response.text))
